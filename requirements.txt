@@ -1,0 +1,8 @@
+customtkinter
+matplotlib
+numpy
+pandas
+lmfit
+openpyxl
+scipy
+packaging
