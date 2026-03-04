@@ -227,6 +227,10 @@ class AmideFitApp(ctk.CTk):
         self.toolbar.update()
 
         self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
+        self.original_savefig = self.fig.savefig
+        self.fig.savefig = self.custom_savefig
+
+
     def _style_plots(self):
         self.fig.patch.set_facecolor('#2b2b2b')
         for ax in [self.ax_main, self.ax_res]:
@@ -239,6 +243,52 @@ class AmideFitApp(ctk.CTk):
         self.ax_main.set_ylabel("Absorbancja")
         self.ax_res.set_ylabel("Residua")
         self.ax_res.set_xlabel("Liczba falowa (cm⁻¹)")
+
+    def custom_savefig(self, *args, **kwargs):
+        """Tymczasowo zmienia styl na jasny, zapisuje plik i wraca do ciemnego"""
+
+        # 1. Przełączenie na jasny motyw
+        self.fig.patch.set_facecolor('white')
+        for ax in [self.ax_main, self.ax_res]:
+            ax.set_facecolor('white')
+            ax.tick_params(colors='black')
+            ax.xaxis.label.set_color('black')
+            ax.yaxis.label.set_color('black')
+            for spine in ax.spines.values():
+                spine.set_color('black')
+
+        # Poprawa kolorów w legendzie
+        leg = self.ax_main.get_legend()
+        if leg:
+            leg.get_frame().set_facecolor('white')
+            for text in leg.get_texts():
+                text.set_color('black')
+
+        # Przyciemnienie żółtej linii residuów (żółty na białym znika)
+        for line in self.ax_res.get_lines():
+            if line.get_color() == 'yellow':
+                line.set_color('black')
+
+        self.canvas.draw()
+
+        # 2. Właściwy zapis do pliku (z wymuszonym białym tłem)
+        kwargs['facecolor'] = 'white'
+        self.original_savefig(*args, **kwargs)
+
+        # 3. Powrót do ciemnego motywu (wykorzystujemy Twoją gotową funkcję)
+        self._style_plots()
+
+        # Powrót legendy i residuów do starych barw
+        if leg:
+            leg.get_frame().set_facecolor('#2b2b2b')
+            for text in leg.get_texts():
+                text.set_color('white')
+
+        for line in self.ax_res.get_lines():
+            if line.get_color() == 'black':
+                line.set_color('yellow')
+
+        self.canvas.draw()
 
     def _init_right_panel(self):
         self.right_frame = ctk.CTkFrame(self, width=320, corner_radius=0)

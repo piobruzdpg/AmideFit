@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
 }
 
 # Kolory do wykresów (poszerzona paleta)
-PEAK_COLORS = ['#FF00FF', '#00FF00', '#FFFF00', '#FFA500', '#00BFFF', '#ADFF2F', '#FF1493', '#00FA9A', '#FF4500', '#1E90FF']
+PEAK_COLORS = ['#FF00FF', '#228B22', '#DC143C', '#FFA500', '#0000CD', '#8B008B', '#FF1493', '#008080', '#FF4500', '#1E90FF']
 
 # --- STRUKTURY DRUGORZĘDOWE (AMID I / I') ---
 # Format: (min, max, nazwa_struktury)
