@@ -64,11 +64,22 @@ class AmideLogic:
 
     def save_state_to_history(self):
         if self.x_data is not None:
-            self.history.append((self.x_data.copy(), self.y_data.copy()))
+            # Kopiujemy x, y oraz robimy głęboką kopię słowników pików
+            peaks_copy = [p.copy() for p in self.peaks]
+            # Zapisujemy tuple: (x, y, peaks, peak_counter)
+            self.history.append((self.x_data.copy(), self.y_data.copy(), peaks_copy, self.peak_counter))
 
     def undo(self):
         if self.history:
-            self.x_data, self.y_data = self.history.pop()
+            state = self.history.pop()
+            self.x_data = state[0]
+            self.y_data = state[1]
+
+            # Zabezpieczenie na wypadek, gdybyśmy mieli w historii stare stany (tylko x, y)
+            if len(state) > 2:
+                self.peaks = state[2]
+                self.peak_counter = state[3]
+
             return True
         return False
 
@@ -301,6 +312,9 @@ class AmideLogic:
 
     def update_peak_param(self, index, key, value):
         self.peaks[index][key] = value
+        # --- NOWE: Aktualizacja struktury, gdy ręcznie wpiszesz lub przeciągniesz pozycję ---
+        if key == 'center':
+            self.peaks[index]['structure'] = self._guess_structure(value)
 
     def toggle_peak_lock(self, index, key):
         self.peaks[index][key] = not self.peaks[index].get(key, False)
@@ -374,7 +388,7 @@ class AmideLogic:
         """
         if not self.peaks or self.x_data is None:
             raise ValueError("Brak danych lub pików do fitowania.")
-
+        self.save_state_to_history()
         composite_model = None
         params = Parameters()
 
@@ -451,6 +465,8 @@ class AmideLogic:
                 p['gamma'] = bv[prefix + 'gamma']
             if p['type'] == 'PseudoVoigt' and prefix + 'fraction' in bv:
                 p['fraction'] = bv[prefix + 'fraction']
+            # --- NOWE: Ponowne przypisanie struktury po zmianie pozycji przez solver ---
+            p['structure'] = self._guess_structure(p['center'])
 
     # --- WYLICZANIE KRZYWYCH ---
 
@@ -517,33 +533,45 @@ class AmideLogic:
         df_curves = pd.DataFrame(data_dict)
 
         # 2. Parametry
-        total_area = sum(p['area'] for p in self.peaks)
+        total_area_all = sum(p['area'] for p in self.peaks)
+
+        # --- NOWE: Obliczenie sumy pól tylko dla właściwych struktur Amidu I ---
+        valid_area_amide = sum(
+            p['area'] for p in self.peaks
+            if 1600 <= p['center'] <= 1700 and p.get('structure', '') not in ["Side Chains", "Other", "Inny"]
+        )
+
         param_rows = []
         for p in self.peaks:
-            # Uproszczone FWHM (dla wszystkich modeli bazujemy na sigmie,
-            # choć dla Lorentza FWHM = 2*sigma, a dla Gaussa 2.35*sigma)
             fwhm_factor = 2.0 if p['type'] == 'Lorentzian' else 2.35482
             fwhm = fwhm_factor * p['sigma']
 
-            # Height estymacja
             if p['type'] == 'Lorentzian':
                 height = p['area'] / (max(p['sigma'], 1e-5) * np.pi)
-            else:  # Gauss/Voigt approx
+            else:
                 height = p['area'] / (max(p['sigma'], 1e-5) * np.sqrt(2 * np.pi))
 
-            perc = (p['area'] / total_area * 100) if total_area > 0 else 0
+            # Procenty całkowite (stare)
+            perc_total = (p['area'] / total_area_all * 100) if total_area_all > 0 else 0
+
+            # --- NOWE: Procenty wewnątrz pasma Amidu I (zgodne z wykresem) ---
+            struct_full = p.get('structure', 'Other')
+            if 1600 <= p['center'] <= 1700 and struct_full not in ["Side Chains", "Other", "Inny"]:
+                perc_amide = (p['area'] / valid_area_amide * 100) if valid_area_amide > 0 else 0
+            else:
+                perc_amide = 0.0
 
             row = {
                 "Peak ID": p['id'],
-                "Structure": p.get('structure', 'Other'),  # <--- DO RAPORTU
+                "Structure": struct_full,
                 "Type": p['type'],
                 "Position": p['center'],
                 "Height": height,
                 "FWHM": fwhm,
                 "Area": p['area'],
-                "% Area": perc
+                "% Area (Total)": perc_total,
+                "% Area (Amide I)": perc_amide
             }
-            # Dodajemy extra params do raportu
             if 'gamma' in p: row['Gamma'] = p['gamma']
             if 'fraction' in p: row['Fraction'] = p['fraction']
 

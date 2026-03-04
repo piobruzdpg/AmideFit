@@ -21,6 +21,13 @@ class AmideFitApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # --- NOWE: Automatyczne skalowanie dla małych ekranów ---
+        screen_height = self.winfo_screenheight()
+        if screen_height <= 768:
+            ctk.set_window_scaling(0.85)  # Zmniejsza całe okno i układ
+            ctk.set_widget_scaling(0.85)  # Zmniejsza przyciski i czcionki
+        # --------------------------------------------------------
+
         self.logic = AmideLogic()
 
         self.title("AmideFit-Py v1.1 (Multi-Shape)")
@@ -61,7 +68,7 @@ class AmideFitApp(ctk.CTk):
         self.zoom_mode = False
 
     def _init_left_panel(self):
-        self.left_frame = ctk.CTkFrame(self, width=220, corner_radius=0)
+        self.left_frame = ctk.CTkScrollableFrame(self, width=220, corner_radius=0)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
 
         # --- SEKCJA 1: PLIK ---
@@ -302,7 +309,7 @@ class AmideFitApp(ctk.CTk):
 
     def undo_action(self):
         if self.logic.undo():
-            self.plot_spectrum()
+            self.refresh_all()
             if not self.logic.history: self.btn_undo.configure(state="disabled", fg_color="gray")
 
     def refresh_all(self, full_reset=False):
@@ -328,6 +335,12 @@ class AmideFitApp(ctk.CTk):
                 # Maksimum dla skalowania etykiet
                 y_max_plot = max(y)
 
+                # --- NOWE: Obliczenie sumy pól tylko dla właściwych struktur Amidu I ---
+                valid_area_total = sum(
+                    p['area'] for p in self.logic.peaks
+                    if 1600 <= p['center'] <= 1700 and p.get('structure', '') not in ["Side Chains", "Other", "Inny"]
+                )
+
                 for i, comp in enumerate(curves['components']):
                     self.ax_main.plot(x, comp['y'], linestyle='--', color=comp['color'], alpha=0.8)
                     self.ax_main.fill_between(x, comp['y'], alpha=0.1, color=comp['color'])
@@ -335,13 +348,27 @@ class AmideFitApp(ctk.CTk):
                     # Rysowanie Etykiety Struktury nad pikiem
                     p_data = self.logic.peaks[i]
                     center_x = p_data['center']
+
                     # Znajdź Y w maksimum piku (z modelu)
                     idx_center = (np.abs(x - center_x)).argmin()
                     peak_height = comp['y'][idx_center]
 
-                    # Dodaj tekst (np. "Beta-Sheet")
-                    struct_short = p_data.get('structure', '')[:4]  # Skrót dla czytelności wykresu
-                    self.ax_main.text(center_x, peak_height + (y_max_plot * 0.02), struct_short,
+                    # Przygotowanie tekstu etykiety
+                    struct_full = p_data.get('structure', 'Other')
+                    struct_short = struct_full[:4]  # Zostawiamy skrót dla czytelności
+
+                    # --- NOWE: Doklejanie procentów dla właściwych pików ---
+                    if 1600 <= center_x <= 1700 and struct_full not in ["Side Chains", "Other", "Inny"]:
+                        if valid_area_total > 0:
+                            perc = (p_data['area'] / valid_area_total) * 100
+                            label_text = f"{struct_short} ({perc:.1f}%)"
+                        else:
+                            label_text = f"{struct_short} (0.0%)"
+                    else:
+                        label_text = struct_short
+
+                    # Dodaj tekst z rotacją 90 stopni
+                    self.ax_main.text(center_x, peak_height + (y_max_plot * 0.02), label_text,
                                       color=comp['color'], fontsize=8, ha='center', rotation=90)
 
                 self.ax_main.plot(x, curves['total'], color='red', label='Fit', linewidth=2, zorder=3)
@@ -640,6 +667,7 @@ class AmideFitApp(ctk.CTk):
                 # ... (stara logika dodawania piku)
                 model_type = self.combo_model.get()
                 self.logic.add_peak(event.xdata, event.ydata, model_type=model_type)
+                self.btn_undo.configure(state="normal", fg_color=["#3B8ED0", "#1F6AA5"])
                 self.refresh_all()
 
             elif self.baseline_mode:
@@ -713,6 +741,8 @@ class AmideFitApp(ctk.CTk):
 
             self.refresh_all()
             self.btn_export.configure(state="normal", fg_color="green")
+
+            self.btn_undo.configure(state="normal", fg_color=["#3B8ED0", "#1F6AA5"])
 
             # Aktualizacja paska GoF
             gof_text = f"R²: {stats['r2']:.4f}  |  Chi²: {stats['chisqr']:.2e}  |  RMSE: {stats['rmse']:.4f}  |  Iter: {stats['nfev']}"
