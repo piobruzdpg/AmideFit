@@ -12,6 +12,8 @@ import pandas as pd
 from modules.config import THEME_MODE, COLOR_THEME, STRUCTURE_OPTIONS
 from modules.logic import AmideLogic
 from modules.custom_widgets import DraggableEntry, ToolTip
+import threading
+
 
 ctk.set_appearance_mode(THEME_MODE)
 ctk.set_default_color_theme(COLOR_THEME)
@@ -177,7 +179,7 @@ class AmideFitApp(ctk.CTk):
         frame_algo.grid(row=18, column=0, padx=20, pady=5, sticky="ew")
         lbl_alg = ctk.CTkLabel(frame_algo, text="Metoda:", font=("Arial", 10))
         lbl_alg.pack(side="left")
-        self.combo_algo = ctk.CTkComboBox(frame_algo, values=["Levenberg-Marquardt", "Nelder-Mead", "Powell"],
+        self.combo_algo = ctk.CTkComboBox(frame_algo, values=["Levenberg-Marquardt", "Nelder-Mead", "Powell", "MaxEnt (Uproszczona)", "MCMC Bayes (Pełna)"],
                                           width=120, font=("Arial", 11))
         self.combo_algo.set("Levenberg-Marquardt")
         self.combo_algo.pack(side="right")
@@ -776,46 +778,89 @@ class AmideFitApp(ctk.CTk):
             messagebox.showerror("Błąd", "Interpolacja nie powiodła się.")
 
     def run_fit_gui(self):
-        # Mapowanie nazw z ComboBoxa na kody lmfit
         ALGO_MAP = {
             "Levenberg-Marquardt": "leastsq",
             "Nelder-Mead": "nelder",
-            "Powell": "powell"
+            "Powell": "powell",
+            "MaxEnt (Uproszczona)": "maxent",
+            "MCMC Bayes (Pełna)": "mcmc"
         }
         method_name = self.combo_algo.get()
         method_code = ALGO_MAP.get(method_name, "leastsq")
 
+        # Jeśli to długie obliczenia (MCMC lub MaxEnt), puszczamy to w osobnym wątku z oknem ładowania
+        if method_code in ['mcmc', 'maxent']:
+            self._run_fit_with_loading_window(method_code)
+        else:
+            # Szybkie klasyczne metody puszczamy normalnie
+            self._run_fit_logic(method_code)
+
+    def _run_fit_with_loading_window(self, method_code):
+        """Tworzy okno pop-up i uruchamia obliczenia w tle"""
+        self.btn_run_fit.configure(state="disabled")
+
+        # Tworzenie okienka Pop-Up
+        self.progress_win = ctk.CTkToplevel(self)
+        self.progress_win.title("Obliczenia w toku")
+        self.progress_win.geometry("350x150")
+        self.progress_win.attributes('-topmost', True)  # Zawsze na wierzchu
+        self.progress_win.transient(self)
+
+        # Centrowanie okienka
+        self.progress_win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (350 // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (150 // 2)
+        self.progress_win.geometry(f"+{x}+{y}")
+
+        msg = "Trwa próbkowanie Bayesowskie (MCMC)...\nTo potrwa od kilkunastu sekund do paru minut." if method_code == 'mcmc' else "Trwa optymalizacja Maksimum Entropii..."
+        ctk.CTkLabel(self.progress_win, text=msg, font=("Arial", 12)).pack(pady=(20, 10))
+
+        # Pasek postępu typu "nieokreślonego" (latający w lewo i prawo)
+        pb = ctk.CTkProgressBar(self.progress_win, mode="indeterminate", width=250)
+        pb.pack(pady=10)
+        pb.start()
+
+        # Funkcja wykonywana w tle
+        def background_task():
+            try:
+                stats = self.logic.run_optimization(method=method_code)
+                # Kiedy skończy, wracamy do głównego wątku GUI (self.after) by zaktualizować interfejs
+                self.after(0, lambda: self._on_fit_success(stats))
+            except Exception as e:
+                self.after(0, lambda: self._on_fit_error(str(e)))
+
+        # Startujemy wątek w tle (daemon=True sprawia, że umrze razem z głównym programem w razie zamknięcia)
+        threading.Thread(target=background_task, daemon=True).start()
+
+    def _run_fit_logic(self, method_code):
+        """Standardowe synchroniczne wywołanie dla szybkich algorytmów"""
         try:
-            # Uruchomienie fitowania i pobranie statystyk
             stats = self.logic.run_optimization(method=method_code)
-
-            self.refresh_all()
-            self.btn_export.configure(state="normal", fg_color="green")
-
-            self.btn_undo.configure(state="normal", fg_color=["#3B8ED0", "#1F6AA5"])
-
-            # Aktualizacja paska GoF
-            gof_text = f"R²: {stats['r2']:.4f}  |  Chi²: {stats['chisqr']:.2e}  |  RMSE: {stats['rmse']:.4f}  |  Iter: {stats['nfev']}"
-            self.lbl_gof.configure(text=gof_text, text_color="#00ff00" if stats['r2'] > 0.99 else "orange")
-
-            messagebox.showinfo("Sukces", f"Fitowanie zakończone!\n\n{gof_text}")
-
+            self._on_fit_success(stats)
         except Exception as e:
-            # ROZBUDOWANA OBSŁUGA BŁĘDÓW (Punkt 4)
-            error_msg = str(e)
-            suggestion = ""
+            self._on_fit_error(str(e))
 
-            if "Number of calls to function has reached maxfev" in error_msg:
-                suggestion = "Sugestia: Algorytm potrzebował więcej czasu. Spróbuj zwiększyć limity (przyszła wersja) lub użyj metody 'Nelder-Mead'."
-            elif "not a number" in error_msg or "NaN" in error_msg:
-                suggestion = "Sugestia: Parametry przybrały niepoprawne wartości. Sprawdź czy sigmy nie są ujemne lub zablokuj niektóre parametry."
-            elif "flat" in error_msg:
-                suggestion = "Sugestia: Wykres lub model wydaje się płaski. Dodaj więcej pików."
-            else:
-                suggestion = "Sugestia: Spróbuj zmienić metodę fitowania na 'Nelder-Mead' lub zablokuj pozycje pików."
+    def _on_fit_success(self, stats):
+        """Callback po udanym fitowaniu"""
+        if hasattr(self, 'progress_win') and self.progress_win.winfo_exists():
+            self.progress_win.destroy()
 
-            full_msg = f"Niestety, algorytm napotkał problem:\n\n{error_msg}\n\n{suggestion}"
-            messagebox.showerror("Błąd Fitowania", full_msg)
+        self.refresh_all()
+        self.btn_export.configure(state="normal", fg_color="green")
+        self.btn_undo.configure(state="normal", fg_color=["#3B8ED0", "#1F6AA5"])
+        self.btn_run_fit.configure(state="normal")
+
+        gof_text = f"R²: {stats['r2']:.4f}  |  Chi²: {stats['chisqr']:.2e}  |  RMSE: {stats['rmse']:.4f}"
+        self.lbl_gof.configure(text=gof_text, text_color="#00ff00" if stats['r2'] > 0.99 else "orange")
+        messagebox.showinfo("Sukces", f"Fitowanie zakończone!\n\n{gof_text}")
+
+    def _on_fit_error(self, error_msg):
+        """Callback przy błędzie fitowania"""
+        if hasattr(self, 'progress_win') and self.progress_win.winfo_exists():
+            self.progress_win.destroy()
+
+        self.btn_run_fit.configure(state="normal")
+        messagebox.showerror("Błąd Fitowania", f"Niestety, algorytm napotkał problem:\n\n{error_msg}")
 
     # Obsługa Offsetu
     def toggle_offset(self):

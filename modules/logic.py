@@ -389,6 +389,20 @@ class AmideLogic:
         if not self.peaks or self.x_data is None:
             raise ValueError("Brak danych lub pików do fitowania.")
         self.save_state_to_history()
+
+        if method in ['maxent', 'mcmc']:
+            # Importujemy nasz nowy moduł tylko wtedy, gdy jest potrzebny
+            from modules.bayes import BayesianFitter
+            fitter = BayesianFitter(self.x_data, self.y_data, self.peaks, self.MODEL_MAP)
+
+            if method == 'maxent':
+                result_stats, updated_peaks = fitter.run_maxent_simplified()
+            else:
+                result_stats, updated_peaks = fitter.run_mcmc_full()
+
+            self.peaks = updated_peaks
+            return result_stats
+
         composite_model = None
         params = Parameters()
 
